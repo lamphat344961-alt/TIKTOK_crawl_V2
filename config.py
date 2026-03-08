@@ -46,7 +46,7 @@ CRAWL_DATE_TO   = CRAWL_END_DATE
 # ===========================================================================
 # GIỚI HẠN CRAWL
 # ===========================================================================
-MAX_CREATORS          = None   # None = crawl tất cả, số nguyên = giới hạn
+MAX_CREATORS          = 20  # None = crawl tất cả, số nguyên = giới hạn
 MAX_VIDEOS_PER_CREATOR = 200   # hard cap số video mỗi creator
 MAX_SKIP_OUT_OF_RANGE  = 7     # bỏ qua liên tiếp bao nhiêu video ngoài range thì dừng creator
 MAX_COMMENTS_PER_VIDEO = 500   # giới hạn comment mỗi video

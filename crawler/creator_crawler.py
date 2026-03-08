@@ -1,14 +1,12 @@
 """
-crawler/creator_crawler.py
-==========================
-Crawl thông tin profile creator — followers_count, total_likes.
-Dùng method của BaseCrawler (không import Selenium helpers từ helpers.py).
+crawler/creator_crawler.py — Crawl thông tin profile creator
+=============================================================
+Lấy: followers_count, total_likes từ trang profile TikTok
 """
-
 from selenium.webdriver.common.by import By
 
-from crawler.base_crawler import BaseCrawler
-from helpers import parse_count
+from .base_crawler import BaseCrawler
+from helpers import parse_count, human_sleep, safe_text
 
 
 class CreatorCrawler(BaseCrawler):
@@ -17,19 +15,29 @@ class CreatorCrawler(BaseCrawler):
     def extract_profile_stats(self) -> dict:
         """
         Lấy số Followers và tổng Likes trên trang profile.
-        Selectors: strong[data-e2e="followers-count"] / strong[data-e2e="likes-count"]
+        Cuộn nhẹ xuống trước để trigger lazy-load của TikTok.
+
+        Selectors đã xác nhận:
+          <strong data-e2e="followers-count">2M</strong>
+          <strong data-e2e="likes-count">138.5M</strong>
         """
         print("[profile] Đang lấy thông tin profile...")
 
         # Cuộn nhẹ để trigger lazy-load
         self.driver.execute_script("window.scrollTo(0, 400);")
-        self.random_sleep(1.0, 1.5)
+        human_sleep(1.0, 1.5)
 
-        followers_text = self.safe_text(
-            By.CSS_SELECTOR, 'strong[data-e2e="followers-count"]', timeout=15
+        followers_text = safe_text(
+            self.driver,
+            By.CSS_SELECTOR,
+            'strong[data-e2e="followers-count"]',
+            timeout=15,
         )
-        likes_text = self.safe_text(
-            By.CSS_SELECTOR, 'strong[data-e2e="likes-count"]', timeout=15
+        likes_text = safe_text(
+            self.driver,
+            By.CSS_SELECTOR,
+            'strong[data-e2e="likes-count"]',
+            timeout=15,
         )
 
         result = {

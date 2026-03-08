@@ -3,17 +3,8 @@ crawler/comment_crawler.py
 ==========================
 Crawl comment và reply dùng requests thuần (không Selenium, không cookies).
 
-Đã xác nhận qua test thực tế:
-  - TikTok /api/comment/list/ hoạt động KHÔNG cần cookies hay msToken
-  - Chỉ cần headers đúng (user-agent, referer, origin)
-  - Gửi cookies/msToken ngược lại gây block (body rỗng)
-
-Flow:
-  1. Tạo session sạch với headers giả lập browser
-  2. GET /api/comment/list/?aweme_id=...&cursor=0
-  3. Paginate đến hết (has_more=0)
-  4. Với mỗi comment có replies → GET /api/comment/list/reply/
-  5. Upsert vào MongoDB qua MongoCommentDB
+Giữ nguyên logic fetch/paginate đã test; chỉ thay lớp lưu trữ để ghi qua DBManager
+thay vì MongoCommentDB.
 """
 
 import random
@@ -22,7 +13,6 @@ import time
 import requests
 
 import config
-from db.mongo_comment_db import MongoCommentDB
 
 
 # ===========================================================================
@@ -49,8 +39,8 @@ BASE_PARAMS = {
     "app_name": "tiktok_web",
 }
 
-API_COMMENT = "https://www.tiktok.com/api/comment/list/"
-API_REPLY   = "https://www.tiktok.com/api/comment/list/reply/"
+API_COMMENT = getattr(config, "API_COMMENT_LIST", "https://www.tiktok.com/api/comment/list/")
+API_REPLY   = getattr(config, "API_REPLY_LIST", "https://www.tiktok.com/api/comment/list/reply/")
 
 
 # ===========================================================================
@@ -82,7 +72,7 @@ def _get(session: requests.Session, url: str, params: dict, label: str = "") -> 
                 return data
 
             print(f"[comment_crawler] API lỗi status={data.get('status_code')} "
-                  f"msg={data.get('status_msg','')} {label}")
+                  f"msg={data.get('status_msg', '')} {label}")
             return None
 
         except requests.exceptions.RequestException as e:
@@ -90,6 +80,9 @@ def _get(session: requests.Session, url: str, params: dict, label: str = "") -> 
             print(f"[comment_crawler] Exception {label} lần {attempt}: {e} "
                   f"→ retry sau {wait:.1f}s")
             time.sleep(wait)
+        except ValueError as e:
+            print(f"[comment_crawler] JSON decode lỗi {label}: {e}")
+            return None
 
     print(f"[comment_crawler] Hết retry: {label}")
     return None
@@ -103,14 +96,30 @@ class CommentCrawler:
     """
     Crawl comment và reply dùng requests thuần.
     Khởi tạo 1 lần, dùng chung cho toàn bộ run.
+
+    db cần hỗ trợ các method:
+      - get_existing_comment_cids(video_id, creator_id=None)
+      - get_existing_reply_cids_for_comment(comment_id, video_id=None, creator_id=None)
+      - upsert_comments(comments, creator_id, video_id, skip_cids=None)
+      - upsert_replies(replies, creator_id, video_id, parent_comment_id, skip_cids=None)
     """
 
-    def __init__(self, mongo_db: MongoCommentDB):
-        self.mongo_db      = mongo_db
-        self.session       = requests.Session()
+    def __init__(self, db):
+        self.db         = db
+        self.session    = requests.Session()
         self.session.headers.update(HEADERS)
-        self._req_count    = 0
+        self._req_count = 0
         print("[comment_crawler] Khởi tạo session (no-cookie mode)")
+
+    def reset_session(self):
+        """Tạo session mới để giảm tích luỹ state sau nhiều request."""
+        try:
+            self.session.close()
+        except Exception:
+            pass
+        self.session = requests.Session()
+        self.session.headers.update(HEADERS)
+        print("[comment_crawler] Đã reset session")
 
     # ------------------------------------------------------------------
     # PUBLIC
@@ -124,7 +133,7 @@ class CommentCrawler:
         print(f"\n[comment_crawler] Crawl video: {video_id}")
         result = {"total_comments": 0, "total_replies": 0, "comment_ids": []}
 
-        existing_cids = self.mongo_db.get_existing_comment_cids(video_id)
+        existing_cids = self.db.get_existing_comment_cids(video_id, creator_id)
         if existing_cids:
             print(f"[comment_crawler] Skip {len(existing_cids)} comments đã có")
 
@@ -133,7 +142,7 @@ class CommentCrawler:
         cursor       = 0
         has_more     = 1
         page         = 0
-        max_pages    = config.MAX_COMMENTS_PER_VIDEO // config.API_COMMENT_COUNT
+        max_pages    = max(1, config.MAX_COMMENTS_PER_VIDEO // config.API_COMMENT_COUNT)
 
         while has_more and page < max_pages:
             resp = self._get_comments(video_id, cursor)
@@ -153,16 +162,18 @@ class CommentCrawler:
             page    += 1
 
             if page > 1:
-                print(f"[comment_crawler] Page {page}: +{len(items)} "
-                      f"({len(all_comments)} tổng)")
+                print(f"[comment_crawler] Page {page}: +{len(items)} ({len(all_comments)} tổng)")
 
             if has_more:
                 time.sleep(random.uniform(*config.DELAY_API_REQUEST))
             self._maybe_pause()
 
         # --- Upsert comments ---
-        saved_c = self.mongo_db.upsert_comments(
-            all_comments, creator_id, video_id, skip_cids=existing_cids
+        saved_c = self.db.upsert_comments(
+            all_comments,
+            creator_id,
+            video_id,
+            skip_cids=existing_cids,
         )
         result["total_comments"] = saved_c
         result["comment_ids"]    = [c["cid"] for c in all_comments if c.get("cid")]
@@ -177,15 +188,21 @@ class CommentCrawler:
         total_replies = 0
         for idx, comment in enumerate(need_replies, 1):
             cid = comment["cid"]
-            print(f"[comment_crawler] [{idx}/{len(need_replies)}] "
-                  f"comment {cid} ({comment.get('reply_comment_total',0)} replies)")
+            print(f"[comment_crawler] [{idx}/{len(need_replies)}] comment {cid} "
+                  f"({comment.get('reply_comment_total', 0)} replies)")
 
-            existing_reply_cids = self.mongo_db.get_existing_reply_cids_for_comment(cid)
+            existing_reply_cids = self.db.get_existing_reply_cids_for_comment(
+                cid,
+                video_id=video_id,
+                creator_id=creator_id,
+            )
             replies = self._fetch_replies(video_id, cid)
 
             if replies:
-                saved_r = self.mongo_db.upsert_replies(
-                    replies, creator_id, video_id,
+                saved_r = self.db.upsert_replies(
+                    replies,
+                    creator_id,
+                    video_id,
                     parent_comment_id=cid,
                     skip_cids=existing_reply_cids,
                 )
@@ -206,8 +223,12 @@ class CommentCrawler:
         return _get(
             self.session,
             API_COMMENT,
-            {**BASE_PARAMS, "aweme_id": str(video_id),
-             "count": str(config.API_COMMENT_COUNT), "cursor": str(cursor)},
+            {
+                **BASE_PARAMS,
+                "aweme_id": str(video_id),
+                "count": str(config.API_COMMENT_COUNT),
+                "cursor": str(cursor),
+            },
             label=f"video={video_id} cursor={cursor}",
         )
 
@@ -216,22 +237,26 @@ class CommentCrawler:
         cursor      = 0
         has_more    = 1
         page        = 0
-        max_pages   = config.MAX_REPLIES_PER_COMMENT // config.API_REPLY_COUNT
+        max_pages   = max(1, config.MAX_REPLIES_PER_COMMENT // config.API_REPLY_COUNT)
 
         while has_more and page < max_pages:
             self._req_count += 1
             resp = _get(
                 self.session,
                 API_REPLY,
-                {**BASE_PARAMS, "item_id": str(video_id),
-                 "comment_id": str(comment_id),
-                 "count": str(config.API_REPLY_COUNT), "cursor": str(cursor)},
+                {
+                    **BASE_PARAMS,
+                    "item_id": str(video_id),
+                    "comment_id": str(comment_id),
+                    "count": str(config.API_REPLY_COUNT),
+                    "cursor": str(cursor),
+                },
                 label=f"reply={comment_id} page={page}",
             )
             if not resp:
                 break
 
-            replies  = resp.get("comments") or []
+            replies = resp.get("comments") or []
             if not replies:
                 break
 
