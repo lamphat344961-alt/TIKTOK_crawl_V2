@@ -222,16 +222,14 @@ def safe_click(driver, by, value, timeout: int = 8) -> bool:
 
 
 def extract_create_time_from_snowflake(video_id: str | None) -> datetime | None:
-    """
-    Decode create_time từ TikTok Snowflake video_id (giống truycap_tt.py).
-    Trả về datetime hoặc None nếu không decode được.
-    """
     try:
         if not video_id or not str(video_id).isdigit():
             return None
         video_id_int = int(video_id)
-        timestamp_ms = video_id_int >> 22
-        timestamp_s = timestamp_ms / 1000.0
+        timestamp_s = video_id_int >> 32
+        if timestamp_s <= 0:
+            return None
         return datetime.fromtimestamp(timestamp_s)
     except Exception:
         return None
+print(extract_create_time_from_snowflake("7614520477146565906"))

@@ -51,6 +51,7 @@ class VideoCrawler(BaseCrawler):
                     return dt
                 # Thử parse ngày tương đối: "3 ngày trước"
                 dt = parse_relative_time(text)
+
                 if dt:
                     return dt
         except Exception:
