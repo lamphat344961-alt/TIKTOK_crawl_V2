@@ -46,20 +46,29 @@ CRAWL_DATE_TO   = CRAWL_END_DATE
 # ===========================================================================
 # GIỚI HẠN CRAWL
 # ===========================================================================
-MAX_CREATORS          = 20  # None = crawl tất cả, số nguyên = giới hạn
-MAX_VIDEOS_PER_CREATOR = 200   # hard cap số video mỗi creator
 MAX_SKIP_OUT_OF_RANGE  = 7     # bỏ qua liên tiếp bao nhiêu video ngoài range thì dừng creator
-MAX_COMMENTS_PER_VIDEO = 500   # giới hạn comment mỗi video
-MAX_REPLIES_PER_COMMENT = 200  # giới hạn reply mỗi comment
 
+# MAX_CREATORS          = 20  # None = crawl tất cả, số nguyên = giới hạn
+# MAX_VIDEOS_PER_CREATOR = 200   # hard cap số video mỗi creator
+# MAX_COMMENTS_PER_VIDEO = 500   # giới hạn comment mỗi video
+# MAX_REPLIES_PER_COMMENT = 200  # giới hạn reply mỗi comment
+
+MAX_CREATORS = 2
+MAX_VIDEOS_PER_CREATOR = 10
+MAX_COMMENTS_PER_VIDEO = 5000
+MAX_REPLIES_PER_COMMENT = 200
 
 # ===========================================================================
 # TỐC ĐỘ — CHỐNG BỊ BLOCK
 # ===========================================================================
-DELAY_API_REQUEST  = (0.8, 1.5)   # giây nghỉ giữa các API call
+# DELAY_API_REQUEST  = (0.8, 1.5)   # giây nghỉ giữa các API call
 DELAY_NEXT_VIDEO   = (2.0, 3.5)   # giây chờ sau khi chuyển video
 DELAY_WARMUP       = (4.0, 6.0)   # giây warm-up khi mở trang mới
 DELAY_AFTER_CLICK  = (0.4, 0.8)   # giây sau mỗi click
+
+DELAY_API_REQUEST = (0.4, 0.8)
+
+
 
 # --- Retry khi API lỗi (rate limit / tạm chặn) ---
 API_RETRY_TIMES    = 3            # số lần thử lại mỗi request
@@ -72,9 +81,12 @@ REFRESH_SESSION_EVERY_N_VIDEOS = 5
 
 # --- Nghỉ dài giữa các burst (giảm pattern) ---
 # Sau mỗi N request API liên tiếp, nghỉ thêm một khoảng dài hơn (giây)
-PAUSE_EVERY_N_REQUESTS = 20
-PAUSE_DURATION         = (10.0, 25.0)
+# PAUSE_EVERY_N_REQUESTS = 20
+# PAUSE_DURATION         = (10.0, 25.0)
 
+
+PAUSE_EVERY_N_REQUESTS = 30
+PAUSE_DURATION = (5.0, 10.0)
 # --- Proxy (tùy chọn) ---
 # Đặt PROXY_URL = None nếu không dùng proxy.
 # Ví dụ: "http://user:pass@host:port" hoặc "http://host:port"

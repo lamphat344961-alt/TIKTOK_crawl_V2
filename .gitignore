@@ -2,3 +2,10 @@ chromedriver.exe
 geckodriver1.exe
 tiktok_cookies.json
 __pycache__/
+output_tiktok_raw/
+dry_run_db.py
+gpt_test.py 
+t.py
+log.txt
+log1.txt
+log2.txt

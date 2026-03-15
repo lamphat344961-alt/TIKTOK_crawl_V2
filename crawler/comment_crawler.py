@@ -147,10 +147,12 @@ class CommentCrawler:
         while has_more and page < max_pages:
             resp = self._get_comments(video_id, cursor)
             if not resp:
+                print(f"[comment_crawler] DỪNG do resp=None ở page={page+1}, cursor={cursor}")
                 break
 
             items = resp.get("comments") or []
             if not items:
+                print(f"[comment_crawler] DỪNG do items rỗng ở page={page+1}, cursor={cursor}, has_more={resp.get('has_more')}")
                 break
 
             if page == 0:
@@ -167,6 +169,12 @@ class CommentCrawler:
             if has_more:
                 time.sleep(random.uniform(*config.DELAY_API_REQUEST))
             self._maybe_pause()
+
+            print(
+                    f"[comment_crawler] Page {page + 1} | cursor_in={cursor} | "
+                    f"got={len(items)} | has_more={resp.get('has_more')} | "
+                    f"cursor_out={resp.get('cursor')}"
+                    )   
 
         # --- Upsert comments ---
         saved_c = self.db.upsert_comments(
