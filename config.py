@@ -10,29 +10,52 @@ from datetime import date, timedelta
 
 
 # ===========================================================================
-# MONGODB
+# FIREFOX DRIVER
 # ===========================================================================
-MONGO_URI     = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+# Path đến Firefox profile đã đăng nhập TikTok.
+# Ví dụ Windows:
+#   r"C:\Users\Admin\AppData\Roaming\Mozilla\Firefox\Profiles\xxxxxxxx.default-release"
+# Bỏ trống ("") nếu muốn dùng Firefox không profile (sẽ bị rate-limit nhanh hơn).
+FIREFOX_PROFILE_PATH = r"C:\Users\Admin\AppData\Roaming\Mozilla\Firefox\Profiles\gmc89qu4.tiktok_crawler"
 
-# DB nguồn — chứa danh sách creators cần crawl
-MONGO_SRC_DB         = "tiktok_creators_db"
-MONGO_SRC_COLLECTION = "creators_9k"
+# Path đến geckodriver.exe (để None nếu đã có trong PATH)
+GECKODRIVER_PATH = None
 
-# DB đích — lưu kết quả crawl
-MONGO_DST_DB = "tiktok_crawl_db"
+# True = chạy không hiển thị cửa sổ (headless mode)
+FIREFOX_HEADLESS = False
 
-# Collections trong DB đích
-COL_CREATORS = "creators"   # profile stats
-COL_VIDEOS   = "videos"     # video stats
-COL_COMMENTS = "comments"   # top-level comments (raw API)
-COL_REPLIES  = "replies"    # replies (raw API)
+
+# ===========================================================================
+# SQL SERVER
+# ===========================================================================
+# Kết nối được đọc qua biến môi trường hoặc dùng giá trị mặc định dưới đây.
+# Biến môi trường ưu tiên hơn (để không commit thông tin nhạy cảm vào git).
+#
+# Các biến môi trường hỗ trợ:
+#   SQL_DRIVER    SQL_SERVER    SQL_DATABASE
+#   SQL_SERVER_TRUSTED_CONNECTION (1/0)
+#   SQL_USERNAME  SQL_PASSWORD
+#
+# Mặc định dùng Windows Authentication (Trusted_Connection=yes).
+
+# ===========================================================================
+# FALLBACK: danh sách creator để test nhanh (khi bảng CREATORS trong DB còn trống)
+# ===========================================================================
+# Khi bảng CREATORS chưa có dữ liệu, DBManager.load_creator_inputs() sẽ đọc list này.
+# Để crawl production 3000 creators: import danh sách vào bảng CREATORS trước,
+# rồi để TIKTOK_IDS = [] để tránh nhầm lẫn.
+TIKTOK_IDS = [
+    "lethikhanhhuyen2004",
+    "_thuys.ngaan",
+    "lalalalisa_m",
+]
 
 
 # ===========================================================================
 # BỘ LỌC THỜI GIAN VIDEO
 # ===========================================================================
 CRAWL_END_DATE    = date.today()   # Ngày kết thúc (mặc định = hôm nay)
-CRAWL_DAYS_WINDOW = 90             # Cửa sổ thời gian (ngày)
+CRAWL_DAYS_WINDOW = 90             # Cửa sổ thời gian (ngày) — chỉ lấy video trong 90 ngày gần nhất
 
 # Tính tự động — không cần chỉnh 2 dòng dưới
 CRAWL_DATE_FROM = CRAWL_END_DATE - timedelta(days=CRAWL_DAYS_WINDOW)
@@ -46,59 +69,54 @@ CRAWL_DATE_TO   = CRAWL_END_DATE
 # ===========================================================================
 # GIỚI HẠN CRAWL
 # ===========================================================================
-MAX_SKIP_OUT_OF_RANGE  = 7     # bỏ qua liên tiếp bao nhiêu video ngoài range thì dừng creator
+MAX_SKIP_OUT_OF_RANGE = 5   # (dự phòng, không dùng trong luồng mới)
 
-# MAX_CREATORS          = 20  # None = crawl tất cả, số nguyên = giới hạn
-# MAX_VIDEOS_PER_CREATOR = 200   # hard cap số video mỗi creator
-# MAX_COMMENTS_PER_VIDEO = 500   # giới hạn comment mỗi video
-# MAX_REPLIES_PER_COMMENT = 200  # giới hạn reply mỗi comment
+# MAX_CREATORS = None          → crawl tất cả
+# MAX_CREATORS = 2             → chỉ crawl 2 creator đầu (dùng để test)
+MAX_CREATORS           = 5
+MAX_VIDEOS_PER_CREATOR = None     # hard cap số video mỗi creator (đặt None để không giới hạn)
+MAX_COMMENTS_PER_VIDEO = 10000   # giới hạn comment mỗi video
+MAX_REPLIES_PER_COMMENT = 5000   # giới hạn reply mỗi comment
 
-MAX_CREATORS = 2
-MAX_VIDEOS_PER_CREATOR = 10
-MAX_COMMENTS_PER_VIDEO = 5000
-MAX_REPLIES_PER_COMMENT = 200
+
+# ===========================================================================
+# CHECKPOINT / RESUME
+# ===========================================================================
+# True  = khi khởi động lại, bỏ qua creator đã có video trong DB
+#         (tự động tiếp tục từ chỗ bị crash)
+# False = luôn crawl lại từ đầu (dùng khi muốn update dữ liệu)
+RESUME_SKIP_CRAWLED = True
+
+# True  = so sánh username (string) thay vì numeric CREATOR_ID
+#         (dùng khi bảng CREATORS chứa username thay vì ID số)
+RESUME_SKIP_BY_USERNAME = False
+
 
 # ===========================================================================
 # TỐC ĐỘ — CHỐNG BỊ BLOCK
 # ===========================================================================
-# DELAY_API_REQUEST  = (0.8, 1.5)   # giây nghỉ giữa các API call
-DELAY_NEXT_VIDEO   = (2.0, 3.5)   # giây chờ sau khi chuyển video
-DELAY_WARMUP       = (4.0, 6.0)   # giây warm-up khi mở trang mới
-DELAY_AFTER_CLICK  = (0.4, 0.8)   # giây sau mỗi click
+DELAY_NEXT_VIDEO  = (1.0, 2.5)   # giây chờ sau khi xong 1 video (comment xong)
+DELAY_WARMUP      = (3.0, 5.0)   # giây warm-up khi mở trang mới
+DELAY_AFTER_CLICK = (0.4, 0.8)   # giây sau mỗi click
 
-DELAY_API_REQUEST = (0.4, 0.8)
+DELAY_API_REQUEST = (0.2, 0.5)   # giây nghỉ giữa các API call (comment/reply)
 
+# --- Retry khi API lỗi ---
+API_RETRY_TIMES   = 3             # số lần thử lại mỗi request
+API_RETRY_BACKOFF = (5.0, 15.0)  # giây chờ giữa các lần retry
 
-
-# --- Retry khi API lỗi (rate limit / tạm chặn) ---
-API_RETRY_TIMES    = 3            # số lần thử lại mỗi request
-API_RETRY_BACKOFF  = (5.0, 15.0)  # giây chờ giữa mỗi lần retry (random)
-
-# --- Refresh session (cookies) định kỳ ---
-# Sau mỗi N video crawl comment, build lại session từ Selenium (cookies mới)
-# None = không refresh; số nguyên = refresh sau mỗi N video
+# --- Refresh session cookies định kỳ ---
+# Sau mỗi N video, lấy cookies mới từ Firefox và build lại requests.Session
 REFRESH_SESSION_EVERY_N_VIDEOS = 5
 
-# --- Nghỉ dài giữa các burst (giảm pattern) ---
-# Sau mỗi N request API liên tiếp, nghỉ thêm một khoảng dài hơn (giây)
-# PAUSE_EVERY_N_REQUESTS = 20
-# PAUSE_DURATION         = (10.0, 25.0)
-
-
+# --- Nghỉ dài định kỳ giữa các burst request ---
 PAUSE_EVERY_N_REQUESTS = 30
-PAUSE_DURATION = (5.0, 10.0)
+PAUSE_DURATION         = (2.0, 5.0)
+
 # --- Proxy (tùy chọn) ---
-# Đặt PROXY_URL = None nếu không dùng proxy.
-# Ví dụ: "http://user:pass@host:port" hoặc "http://host:port"
+# None = không dùng proxy.
+# Ví dụ: "http://user:pass@host:port"
 PROXY_URL = os.getenv("TIKTOK_PROXY", None)
-
-
-# ===========================================================================
-# CHROME DRIVER
-# ===========================================================================
-CHROME_DRIVER_PATH = r"chromedriver.exe"   # đặt cùng thư mục với main.py
-CHROME_USER_DATA   = r"C:\Users\Admin\AppData\Local\Google\Chrome\User Data"
-CHROME_PROFILE     = "Default"             # tên profile đang đăng nhập TikTok
 
 
 # ===========================================================================
@@ -106,5 +124,18 @@ CHROME_PROFILE     = "Default"             # tên profile đang đăng nhập Ti
 # ===========================================================================
 API_COMMENT_LIST  = "https://www.tiktok.com/api/comment/list/"
 API_REPLY_LIST    = "https://www.tiktok.com/api/comment/list/reply/"
-API_COMMENT_COUNT = 20   # số comment mỗi page
+API_COMMENT_COUNT = 20   # số comment mỗi page (max TikTok cho phép)
 API_REPLY_COUNT   = 20   # số reply mỗi page
+
+
+# ===========================================================================
+# GIỮ LẠI ĐỂ BACKWARD COMPAT (không còn dùng trong luồng mới)
+# ===========================================================================
+MONGO_URI            = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+MONGO_SRC_DB         = "tiktok_creators_db"
+MONGO_SRC_COLLECTION = "creators_9k"
+MONGO_DST_DB         = "tiktok_crawl_db"
+COL_CREATORS         = "creators"
+COL_VIDEOS           = "videos"
+COL_COMMENTS         = "comments"
+COL_REPLIES          = "replies"

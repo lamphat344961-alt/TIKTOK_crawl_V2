@@ -5,7 +5,7 @@ Lấy: followers_count, total_likes từ trang profile TikTok
 """
 from selenium.webdriver.common.by import By
 
-from .base_crawler import BaseCrawler
+from ..crawler.base_crawler import BaseCrawler
 from helpers import parse_count, human_sleep, safe_text
 
 

@@ -1,225 +1,269 @@
 """
 main.py
-=======
-Orchestrator cho pipeline:
-Mongo (creators list) -> Selenium profile/video -> SQL Server -> comment API -> SQL Server
+-------
+Orchestrator chính:
+- Đọc danh sách creator cần crawl từ SQL (status: pending / in_progress / error)
+- Trước mỗi profile: navigate đến trang, hiện browser và dừng để người dùng tự vượt
+  kiểm tra nếu có (crawl() sẽ KHÔNG load lại trang)
+- Crawl profile feed -> creator + videos
+- Upsert creator / tags / videos
+- Inject cookies từ browser sang CommentCrawler
+- Crawl comments + replies cho từng video
+
+Lưu ý quan trọng về CREATOR_ID:
+  CREATORS.CREATOR_ID = username TikTok (ví dụ "lethikhanhhuyen2004")
+  Toàn bộ FK chain CREATORS → VIDEOS → COMMENTS → REPLIES đều dùng username.
+  profile_feed_crawler._build_creator_dict() và _build_video_dict() đã được fix
+  để truyền tiktok_id (username) thay vì author.get("id") (numeric TikTok ID).
 """
 
 from __future__ import annotations
 
-import os
-from typing import Any
+import traceback
 
-import pymongo
 from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.firefox.options import Options as FirefoxOptions
-from selenium.webdriver.firefox.service import Service as FirefoxService
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 import config
+from crawler.profile_feed_crawler import ProfileFeedCrawler
 from crawler.comment_crawler import CommentCrawler
-from crawler.creator_crawler import CreatorCrawler
-from crawler.video_crawler import VideoCrawler
 from db.db_manager import DBManager
-from helpers import human_sleep, is_within_days
 
+
+# ============================================================================
+# DRIVER
+# ============================================================================
 
 def build_driver():
-    """
-    Build Firefox driver.
-    Dùng fallback an toàn nếu config.py chưa có biến riêng cho Firefox.
-    """
-    geckodriver_path = getattr(config, "FIREFOX_DRIVER_PATH", None) or os.getenv("GECKODRIVER_PATH") or "geckodriver1.exe"
-    firefox_binary = getattr(config, "FIREFOX_BINARY_PATH", None) or os.getenv("FIREFOX_BINARY")
+    options = webdriver.FirefoxOptions()
 
-    options = FirefoxOptions()
-    if firefox_binary:
-        options.binary_location = firefox_binary
+    if getattr(config, "FIREFOX_HEADLESS", False):
+        print("[main] FIREFOX_HEADLESS=True nhưng luồng hiện tại cần browser hiển thị.")
+        print("[main] Tự động chuyển sang non-headless để hỗ trợ manual check.")
+    # Không set headless
 
-    # Giảm dấu vết automation ở mức Selenium cho Firefox
-    options.set_preference("dom.webdriver.enabled", False)
-    options.set_preference("media.peerconnection.enabled", False)
-    options.set_preference("permissions.default.image", 2)
-    options.set_preference("network.http.use-cache", False)
+    firefox_profile_path = getattr(config, "FIREFOX_PROFILE_PATH", None)
+    if firefox_profile_path:
+        options.set_preference("profile", firefox_profile_path)
 
-    driver = webdriver.Firefox(
-        service=FirefoxService(geckodriver_path),
-        options=options,
-    )
-    driver.set_window_size(1400, 1000)
+    geckodriver_path = getattr(config, "GECKODRIVER_PATH", None)
+
+    if geckodriver_path:
+        service = webdriver.FirefoxService(executable_path=geckodriver_path)
+        driver = webdriver.Firefox(service=service, options=options)
+    else:
+        driver = webdriver.Firefox(options=options)
+
+    
+    driver.set_page_load_timeout(90)
+
     return driver
 
 
-def load_creator_docs() -> list[dict[str, Any]]:
+# ============================================================================
+# MANUAL CHECK — navigate trước, hỏi sau
+# ============================================================================
+
+def navigate_and_wait_for_manual_check(driver, username: str):
     """
-    Lấy creator input từ MongoDB nguồn.
-    Chỉ đọc các field mà bạn đã cung cấp.
+    1. Navigate đến profile URL ngay trong hàm này.
+    2. Hiện browser để người dùng vượt captcha (nếu có) trực tiếp trên trang đích.
+    3. Nhấn Enter để tiếp tục → crawl(already_navigated=True) sẽ KHÔNG load lại trang.
+
+    Quan trọng: KHÔNG để crawl() gọi driver.get() lại sau khi người dùng đã
+    vượt captcha xong — nếu reload sẽ mất trạng thái và phải vượt lại từ đầu.
     """
-    client = pymongo.MongoClient(config.MONGO_URI)
+    url = f"https://www.tiktok.com/@{username}"
+
     try:
-        db = client[config.MONGO_SRC_DB]
-        col = db[config.MONGO_SRC_COLLECTION]
+        driver.switch_to.window(driver.current_window_handle)
+    except Exception:
+        pass
+    try:
+        driver.maximize_window()
+    except Exception:
+        pass
 
-        fields_to_get = {
-            "_id": 0,
-            "ID": 1,
-            "Name": 1,
-            "Country": 1,
-            "Followers": 1,
-            "Engagement": 1,
-            "Median Views": 1,
-            "Start Price": 1,
-            "Broadcast Score": 1,
-            "Collab Score": 1,
-            "Tags": 1,
-        }
-        docs = list(col.find({}, fields_to_get))
-    finally:
-        client.close()
+    print(f"\n[MANUAL CHECK] Đang mở: {url}")
+    try:
+        driver.get(url)
+    except Exception as e:
+        print(f"[MANUAL CHECK] Lỗi load trang: {e}")
 
-    cleaned = []
-    missing_id = 0
-    for doc in docs:
-        creator_id = str(doc.get("ID") or "").strip()
-        if not creator_id:
-            missing_id += 1
-            continue
-        doc["ID"] = creator_id
-        cleaned.append(doc)
+    print("\n" + "=" * 90)
+    print(f"[MANUAL CHECK] Chuẩn bị crawl profile: {username}")
+    print("[MANUAL CHECK] Hãy nhìn cửa sổ browser và tự vượt kiểm tra nếu có.")
+    print("[MANUAL CHECK] Xong thì quay lại terminal và nhấn Enter để tiếp tục.")
+    print("=" * 90)
 
-    print(f"[mongo] Lấy được {len(cleaned)} creators")
-    if missing_id:
-        print(f"[mongo] Bỏ qua {missing_id} documents thiếu field ID")
-    return cleaned
+    try:
+        input()
+    except EOFError:
+        print("[MANUAL CHECK] Không nhận được input() tương tác. Tiếp tục chạy...")
+    except KeyboardInterrupt:
+        print("\n[main] Người dùng dừng chương trình.")
+        raise
 
 
-def open_creator_profile(driver, creator_id: str):
-    url = f"https://www.tiktok.com/@{creator_id}"
-    print(f"\n[main] Mở profile: {url}")
-    driver.get(url)
-    human_sleep(*config.DELAY_WARMUP)
-
-
-def open_first_video_from_profile(driver) -> bool:
-    """
-    Mở video đầu tiên trên profile.
-    Thử nhiều selector nhưng đều chỉ dựa trên link /video/ hoặc card user-post-item.
-    """
-    selectors = [
-        (By.CSS_SELECTOR, 'div[data-e2e="user-post-item"] a[href*="/video/"]'),
-        (By.CSS_SELECTOR, 'a[href*="/video/"]'),
-        (By.XPATH, '//div[contains(@data-e2e, "user-post-item")]'),
-    ]
-
-    for by, value in selectors:
-        try:
-            el = WebDriverWait(driver, 12).until(EC.element_to_be_clickable((by, value)))
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
-            human_sleep(0.4, 0.8)
-            driver.execute_script("arguments[0].click();", el)
-            human_sleep(*config.DELAY_NEXT_VIDEO)
-            return True
-        except Exception:
-            continue
-    return False
-
+# ============================================================================
+# MAIN
+# ============================================================================
 
 def main():
-    print("TikTok Crawler starting...")
-
     driver = None
-    sql_db = None
+    db = None
+
     try:
         driver = build_driver()
-        sql_db = DBManager()
-        if sql_db.conn is None:
-            raise RuntimeError("Không kết nối được SQL Server")
+        db = DBManager()
 
-        comment_crawler = CommentCrawler(sql_db)
-        creator_crawler = CreatorCrawler(driver)
-        video_crawler = VideoCrawler(driver)
+        profile_crawler = ProfileFeedCrawler(driver)
+        comment_crawler = CommentCrawler(db)
 
-        creators = load_creator_docs()
-        if config.MAX_CREATORS:
-            creators = creators[:config.MAX_CREATORS]
+        creators = db.load_creator_inputs()
+        total = len(creators)
 
-        print(f"[main] Crawl {len(creators)} creators")
+        print(f"[main] Tổng creator cần crawl: {total}")
 
-        for idx_creator, source_doc in enumerate(creators, 1):
-            creator_id = source_doc["ID"]
-            print(f"\n{'=' * 70}")
-            print(f"[main] Creator {idx_creator}/{len(creators)}: {creator_id}")
-            print(f"{'=' * 70}")
+        if total == 0:
+            print("[main] Không có creator nào ở trạng thái pending / in_progress / error.")
+            return
 
+        for idx, c in enumerate(creators, 1):
+            # username = CREATORS.CREATOR_ID = PK dùng xuyên suốt FK chain
+            # VIDEOS.CREATOR_ID, COMMENTS.CREATOR_ID, REPLIES.CREATOR_ID đều là username
+            username = (c.get("ID") or "").strip()
+            tags = c.get("Tags", []) or []
+
+            if not username:
+                print(f"[main] Bỏ qua creator dòng {idx}: ID rỗng")
+                continue
+
+            print("\n" + "=" * 90)
+            print(f"[main] Creator {idx}/{total}: {username}")
+            print("=" * 90)
+
+            # Đánh dấu đang xử lý
             try:
-                open_creator_profile(driver, creator_id)
+                db.set_crawl_status(username, "in_progress")
+            except Exception as e:
+                print(f"[main] Không set được status=in_progress cho {username}: {e}")
+                continue
 
-                profile_stats = creator_crawler.extract_profile_stats()
-                sql_db.upsert_creator(creator_id, source_doc, profile_stats)
-                sql_db.sync_creator_tags(creator_id, source_doc.get("Tags"))
+            # Navigate đến trang và chờ người dùng vượt captcha (nếu có)
+            navigate_and_wait_for_manual_check(driver, username)
 
-                if not open_first_video_from_profile(driver):
-                    print(f"[main] Không mở được video đầu tiên của {creator_id}")
+            # Crawl profile — trang đã được load sẵn, KHÔNG reload lại
+            try:
+                result = profile_crawler.crawl(username, already_navigated=True)
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                print(f"[main] Lỗi kỹ thuật khi crawl profile @{username}: {e}")
+                traceback.print_exc()
+                # Giữ status=in_progress để lần sau retry
+                continue
+
+            if result is None:
+                print(f"[main] Crawl lỗi kỹ thuật cho @{username}, giữ status=in_progress để retry sau.")
+                continue
+
+            creator_dict, video_dicts = result
+
+            # Các trạng thái tài khoản đặc biệt: not_found / private / banned / no_videos
+            fail_reason = creator_dict.get("_FAIL_REASON")
+            if fail_reason:
+                try:
+                    db.set_crawl_status(username, fail_reason)
+                    print(f"[main] @{username} -> set status = {fail_reason}")
+                except Exception as e:
+                    print(f"[main] Không set được status={fail_reason} cho @{username}: {e}")
+                continue
+
+            # Upsert creator
+            # creator_dict["CREATOR_ID"] đã là username (fix trong profile_feed_crawler)
+            try:
+                db.upsert_creator(creator_dict)
+            except Exception as e:
+                print(f"[main] Lỗi upsert_creator @{username}: {e}")
+                traceback.print_exc()
+                # Giữ in_progress để retry
+                continue
+
+            # Sync tags
+            try:
+                db.sync_creator_tags(username, tags)
+            except Exception as e:
+                print(f"[main] Lỗi sync tags @{username}: {e}")
+                traceback.print_exc()
+
+            # Bơm cookies từ browser sang requests session của comment crawler
+            try:
+                cookies_dict = profile_crawler.get_cookies_for_requests()
+                if cookies_dict:
+                    comment_crawler.inject_cookies(cookies_dict)
+                    print(f"[main] Injected {len(cookies_dict)} cookies vào CommentCrawler")
+                else:
+                    print("[main] Không lấy được cookies từ browser")
+            except Exception as e:
+                print(f"[main] Lỗi inject cookies @{username}: {e}")
+                traceback.print_exc()
+
+            # Upsert videos + crawl comments
+            # video["CREATOR_ID"] đã là username (fix trong profile_feed_crawler)
+            # comment_crawler.crawl(creator_id=username) nhất quán với VIDEOS.CREATOR_ID
+            all_video_ok = True
+
+            for vidx, video in enumerate(video_dicts, 1):
+                video_id = str(video.get("VIDEO_ID") or "").strip()
+                if not video_id:
+                    print(f"[main] Bỏ qua video rỗng id của @{username}")
                     continue
 
-                seen_video_ids: set[str] = set()
-                video_count = 0
-                skip_out_of_range = 0
+                print(f"[main] Video {vidx}/{len(video_dicts)}: {video_id}")
 
-                while video_count < config.MAX_VIDEOS_PER_CREATOR:
-                    video_stats = video_crawler.extract_video_stats()
-                    video_id = str(video_stats.get("video_id") or "").strip()
-                    if not video_id:
-                        print("[main] Không lấy được video_id, dừng creator")
-                        break
-
-                    if video_id in seen_video_ids:
-                        print(f"[main] Video {video_id} đã gặp lại, dừng để tránh loop")
-                        break
-                    seen_video_ids.add(video_id)
-
-                    create_time = video_stats.get("create_time")
-                    if not is_within_days(create_time, config.CRAWL_DAYS_WINDOW):
-                        skip_out_of_range += 1
-                        print(f"[main] Video ngoài range: {video_id} (skip {skip_out_of_range}/{config.MAX_SKIP_OUT_OF_RANGE})")
-                        if skip_out_of_range >= config.MAX_SKIP_OUT_OF_RANGE:
-                            print(f"[main] Dừng {creator_id} vì quá nhiều video ngoài range")
-                            break
-                        if not video_crawler.click_next_video():
-                            break
-                        human_sleep(*config.DELAY_NEXT_VIDEO)
-                        continue
-
-                    skip_out_of_range = 0
-                    sql_db.upsert_video(creator_id, video_stats)
-                    comment_crawler.crawl(creator_id, video_id)
-
-                    video_count += 1
-                    print(f"[main] Đã crawl {video_count} video cho {creator_id}")
-
-                    if config.REFRESH_SESSION_EVERY_N_VIDEOS and video_count % config.REFRESH_SESSION_EVERY_N_VIDEOS == 0:
-                        comment_crawler.reset_session()
-
-                    if not video_crawler.click_next_video():
-                        print(f"[main] Hết video hoặc không click được next cho {creator_id}")
-                        break
-                    human_sleep(*config.DELAY_NEXT_VIDEO)
-
-            except Exception as e:
-                print(f"[main] Lỗi creator {creator_id}: {e}")
-
-    finally:
-        try:
-            if sql_db:
-                sql_db.close()
-        finally:
-            if driver:
                 try:
-                    driver.quit()
-                except Exception:
-                    pass
+                    db.upsert_video(video)
+                except Exception as e:
+                    all_video_ok = False
+                    print(f"[main] Lỗi upsert_video {video_id}: {e}")
+                    traceback.print_exc()
+                    continue
+
+                try:
+                    comment_crawler.crawl(
+                        creator_id=username,   # username = CREATOR_ID trong VIDEOS
+                        video_id=video_id,
+                    )
+                except Exception as e:
+                    all_video_ok = False
+                    print(f"[main] Lỗi crawl comments video {video_id}: {e}")
+                    traceback.print_exc()
+                    continue
+
+            # Chỉ set done khi toàn bộ phase chính không nổ lỗi nghiêm trọng
+            if all_video_ok:
+                try:
+                    db.set_crawl_status(username, "done")
+                    print(f"[main] @{username} -> set status = done")
+                except Exception as e:
+                    print(f"[main] Không set được status=done cho @{username}: {e}")
+                    traceback.print_exc()
+            else:
+                print(f"[main] @{username} còn lỗi trong quá trình xử lý video/comment, giữ status hiện tại để retry.")
+
+        print("\n[main] Hoàn tất vòng crawl.")
+
+    except KeyboardInterrupt:
+        print("\n[main] Người dùng dừng chương trình.")
+    except Exception as e:
+        print(f"[main] Lỗi không mong muốn: {e}")
+        traceback.print_exc()
+    finally:
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

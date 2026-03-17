@@ -2,14 +2,19 @@
 helpers.py
 ==========
 Các hàm tiện ích dùng chung cho toàn bộ project:
-  - parse_count        : chuyển chuỗi số TikTok ("541.7K") thành int
-  - parse_tiktok_date  : parse ngày từ UI TikTok ("2-17", "2020-2-20")
-  - parse_relative_time: parse thời gian tương đối tiếng Việt ("3 ngày trước")
-  - is_within_range    : kiểm tra datetime có nằm trong DATE_FROM..DATE_TO
-  - normalize_url      : bỏ query string khỏi URL
-  - extract_video_id   : lấy video ID từ URL TikTok
-  - make_comment_id    : tạo composite hash nếu không có ID ổn định
-  - make_reply_id      : tạo composite hash cho reply
+  - parse_count         : chuyển chuỗi số TikTok ("541.7K") thành int
+  - parse_tiktok_date   : parse ngày từ UI TikTok ("2-17", "2020-2-20")
+  - parse_relative_time : parse thời gian tương đối tiếng Việt ("3 ngày trước")
+  - is_within_range     : kiểm tra datetime có nằm trong DATE_FROM..DATE_TO
+  - is_within_days      : kiểm tra datetime trong N ngày gần nhất
+  - normalize_url       : bỏ query string khỏi URL
+  - extract_video_id    : lấy video ID từ URL TikTok
+  - make_comment_id     : tạo composite hash nếu không có ID ổn định
+  - make_reply_id       : tạo composite hash cho reply
+  - human_sleep         : dừng với delay ngẫu nhiên hoặc cố định
+  - safe_text           : lấy text element Selenium an toàn
+  - safe_click          : click element Selenium an toàn bằng JavaScript
+  - extract_create_time_from_snowflake : decode timestamp từ TikTok Snowflake ID
 """
 
 import re
@@ -23,21 +28,19 @@ from selenium.webdriver.support import expected_conditions as EC
 
 
 # ===========================================================================
-# KHOẢNG THỜI GIAN LỌC VIDEO
+# KHOẢNG THỜI GIAN LỌC VIDEO (fallback tĩnh — dùng is_within_days thay thế)
 # ===========================================================================
-# Vẫn giữ DATE_FROM/DATE_TO nếu cần dùng cho báo cáo, nhưng main.py
-# sẽ dùng is_within_days (dynamic window tối đa 90 ngày).
 DATE_FROM = "2025-12-01"
 DATE_TO   = "2026-03-01"
 
 _DATE_FROM_DT = datetime.strptime(DATE_FROM, "%Y-%m-%d")
-_DATE_TO_DT   = datetime.strptime(DATE_TO,   "%Y-%m-%d").replace(
+_DATE_TO_DT   = datetime.strptime(DATE_TO, "%Y-%m-%d").replace(
     hour=23, minute=59, second=59
 )
 
 
 def is_within_range(dt: datetime | None) -> bool:
-    """Giữ lại API cũ, dùng DATE_FROM..DATE_TO nếu còn nơi khác gọi."""
+    """Giữ lại API cũ, dùng DATE_FROM..DATE_TO tĩnh."""
     if dt is None:
         return True
     return _DATE_FROM_DT <= dt <= _DATE_TO_DT
@@ -47,7 +50,6 @@ def is_within_days(dt: datetime | None, days: int) -> bool:
     """
     Kiểm tra datetime có nằm trong [now - days, now] hay không.
     - Nếu days <= 0 hoặc dt is None → luôn True (không giới hạn).
-    - days nên nằm trong [0, 90] (đã clamp ở main.py).
     """
     if dt is None or days <= 0:
         return True
@@ -93,7 +95,6 @@ def parse_tiktok_date(date_str: str) -> datetime | None:
         return None
     date_str = date_str.strip()
 
-    # Dạng đầy đủ: "2020-2-20"
     m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", date_str)
     if m:
         try:
@@ -101,7 +102,6 @@ def parse_tiktok_date(date_str: str) -> datetime | None:
         except ValueError:
             return None
 
-    # Dạng rút gọn cùng năm: "2-17"
     m = re.match(r"^(\d{1,2})-(\d{1,2})$", date_str)
     if m:
         try:
@@ -116,11 +116,14 @@ def parse_relative_time(text: str) -> datetime | None:
     """
     Parse thời gian tương đối tiếng Việt.
       '3 ngày trước' -> datetime.now() - 3 ngày
-      '2 giờ trước'  -> datetime.now() - 2 giờ
     """
     try:
         text = text.strip().lower()
-        m = re.match(r"^(\d+)\s+(phut|gio|ngay|tuan|thang|nam)\s+truoc|^(\d+)\s+(phút|giờ|ngày|tuần|tháng|năm)\s+trước", text)
+        m = re.match(
+            r"^(\d+)\s+(phut|gio|ngay|tuan|thang|nam)\s+truoc"
+            r"|^(\d+)\s+(phút|giờ|ngày|tuần|tháng|năm)\s+trước",
+            text,
+        )
         if not m:
             return None
         num  = int(m.group(1) or m.group(3))
@@ -157,30 +160,30 @@ def extract_video_id(url: str | None) -> str | None:
 
 
 # ===========================================================================
-# COMPOSITE HASH — dùng khi không có ID ổn định từ TikTok
+# COMPOSITE HASH
 # ===========================================================================
 
 def make_comment_id(video_id: str, comment_time: str, text: str) -> str:
-    """Tạo comment ID từ hash nếu không có ID từ TikTok DOM."""
+    """Tạo comment ID từ hash nếu không có ID từ TikTok."""
     raw = f"{video_id}_{comment_time}_{(text or '')[:50]}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 
 def make_reply_id(comment_id: str, reply_time: str, text: str) -> str:
-    """Tạo reply ID từ hash nếu không có ID từ TikTok DOM."""
+    """Tạo reply ID từ hash nếu không có ID từ TikTok."""
     raw = f"{comment_id}_{reply_time}_{(text or '')[:50]}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 
 # ===========================================================================
-# SELENIUM HELPERS DÙNG CHUNG
+# SELENIUM HELPERS
 # ===========================================================================
 
 def human_sleep(min_s: float, max_s: float | None = None):
     """
     Dừng theo số giây cho trước.
-      - Nếu truyền 1 tham số: ngủ đúng số giây đó.
-      - Nếu truyền 2 tham số: ngủ ngẫu nhiên trong [min_s, max_s].
+      - 1 tham số: ngủ đúng số giây đó.
+      - 2 tham số: ngủ ngẫu nhiên trong [min_s, max_s].
     """
     if max_s is None:
         time.sleep(min_s)
@@ -189,10 +192,7 @@ def human_sleep(min_s: float, max_s: float | None = None):
 
 
 def safe_text(driver, by, value, timeout: int = 5) -> str | None:
-    """
-    Lấy text của element an toàn.
-    Trả về None nếu không tìm thấy hoặc bị timeout.
-    """
+    """Lấy text của element an toàn. Trả về None nếu không tìm thấy."""
     try:
         el = WebDriverWait(driver, timeout).until(
             EC.presence_of_element_located((by, value))
@@ -203,17 +203,12 @@ def safe_text(driver, by, value, timeout: int = 5) -> str | None:
 
 
 def safe_click(driver, by, value, timeout: int = 8) -> bool:
-    """
-    Click element an toàn bằng JavaScript.
-    Trả về True nếu click thành công, False nếu không tìm thấy.
-    """
+    """Click element an toàn bằng JavaScript. Trả về True nếu thành công."""
     try:
         el = WebDriverWait(driver, timeout).until(
             EC.element_to_be_clickable((by, value))
         )
-        driver.execute_script(
-            "arguments[0].scrollIntoView({block: 'center'});", el
-        )
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
         human_sleep(0.2, 0.4)
         driver.execute_script("arguments[0].click();", el)
         return True
@@ -222,14 +217,14 @@ def safe_click(driver, by, value, timeout: int = 8) -> bool:
 
 
 def extract_create_time_from_snowflake(video_id: str | None) -> datetime | None:
+    """Decode timestamp từ TikTok Snowflake ID."""
     try:
         if not video_id or not str(video_id).isdigit():
             return None
         video_id_int = int(video_id)
-        timestamp_s = video_id_int >> 32
+        timestamp_s  = video_id_int >> 32
         if timestamp_s <= 0:
             return None
         return datetime.fromtimestamp(timestamp_s)
     except Exception:
         return None
-print(extract_create_time_from_snowflake("7614520477146565906"))

@@ -8,7 +8,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-from .base_crawler import BaseCrawler
+from ..crawler.base_crawler import BaseCrawler
 from helpers import (
     parse_count, safe_text, safe_click,
     normalize_url, extract_video_id,

@@ -1,11 +1,16 @@
 """
 crawler/comment_crawler.py
 ==========================
-Crawl comment và reply dùng requests thuần (không Selenium, không cookies).
+Crawl comment và reply bằng requests thuần (không Selenium).
 
-Giữ nguyên logic fetch/paginate đã test; chỉ thay lớp lưu trữ để ghi qua DBManager
-thay vì MongoCommentDB.
+Thay đổi so với phiên bản cũ:
+  - inject_cookies(driver_or_dict): nhận cookies từ Firefox driver
+    để gắn vào session — giảm đáng kể tỉ lệ bị TikTok rate-limit.
+  - Không còn phụ thuộc vào MongoCommentDB; chỉ làm việc với DBManager.
+  - _maybe_pause() và reset_session() giữ nguyên logic cũ.
 """
+
+from __future__ import annotations
 
 import random
 import time
@@ -33,14 +38,13 @@ HEADERS = {
     "sec-fetch-site":   "same-origin",
 }
 
-# Params tối thiểu — đã test xác nhận đủ để API trả data
 BASE_PARAMS = {
     "aid":      "1988",
     "app_name": "tiktok_web",
 }
 
 API_COMMENT = getattr(config, "API_COMMENT_LIST", "https://www.tiktok.com/api/comment/list/")
-API_REPLY   = getattr(config, "API_REPLY_LIST", "https://www.tiktok.com/api/comment/list/reply/")
+API_REPLY   = getattr(config, "API_REPLY_LIST",   "https://www.tiktok.com/api/comment/list/reply/")
 
 
 # ===========================================================================
@@ -57,12 +61,12 @@ def _get(session: requests.Session, url: str, params: dict, label: str = "") -> 
             resp = session.get(url, params=params, timeout=20)
 
             if resp.status_code != 200:
-                print(f"[comment_crawler] HTTP {resp.status_code} {label} → bỏ qua")
+                print(f"[comment] HTTP {resp.status_code} {label} → bỏ qua")
                 return None
 
             if len(resp.content) == 0:
                 wait = random.uniform(*config.API_RETRY_BACKOFF)
-                print(f"[comment_crawler] Body rỗng {label} "
+                print(f"[comment] Body rỗng {label} "
                       f"→ retry {attempt}/{config.API_RETRY_TIMES} sau {wait:.1f}s")
                 time.sleep(wait)
                 continue
@@ -71,20 +75,19 @@ def _get(session: requests.Session, url: str, params: dict, label: str = "") -> 
             if data.get("status_code") == 0:
                 return data
 
-            print(f"[comment_crawler] API lỗi status={data.get('status_code')} "
+            print(f"[comment] API status={data.get('status_code')} "
                   f"msg={data.get('status_msg', '')} {label}")
             return None
 
         except requests.exceptions.RequestException as e:
             wait = random.uniform(*config.API_RETRY_BACKOFF)
-            print(f"[comment_crawler] Exception {label} lần {attempt}: {e} "
-                  f"→ retry sau {wait:.1f}s")
+            print(f"[comment] Exception {label} lần {attempt}: {e} → retry sau {wait:.1f}s")
             time.sleep(wait)
         except ValueError as e:
-            print(f"[comment_crawler] JSON decode lỗi {label}: {e}")
+            print(f"[comment] JSON decode lỗi {label}: {e}")
             return None
 
-    print(f"[comment_crawler] Hết retry: {label}")
+    print(f"[comment] Hết retry: {label}")
     return None
 
 
@@ -97,11 +100,11 @@ class CommentCrawler:
     Crawl comment và reply dùng requests thuần.
     Khởi tạo 1 lần, dùng chung cho toàn bộ run.
 
-    db cần hỗ trợ các method:
-      - get_existing_comment_cids(video_id, creator_id=None)
-      - get_existing_reply_cids_for_comment(comment_id, video_id=None, creator_id=None)
-      - upsert_comments(comments, creator_id, video_id, skip_cids=None)
-      - upsert_replies(replies, creator_id, video_id, parent_comment_id, skip_cids=None)
+    db phải hỗ trợ:
+      - get_existing_comment_cids(video_id, creator_id)
+      - get_existing_reply_cids_for_comment(comment_id, video_id, creator_id)
+      - upsert_comments(comments, creator_id, video_id, skip_cids)
+      - upsert_replies(replies, creator_id, video_id, parent_comment_id, skip_cids)
     """
 
     def __init__(self, db):
@@ -109,20 +112,72 @@ class CommentCrawler:
         self.session    = requests.Session()
         self.session.headers.update(HEADERS)
         self._req_count = 0
-        print("[comment_crawler] Khởi tạo session (no-cookie mode)")
+        print("[comment] Khởi tạo session (no-cookie mode)")
 
-    def reset_session(self):
-        """Tạo session mới để giảm tích luỹ state sau nhiều request."""
+    # ------------------------------------------------------------------
+    # INJECT COOKIES TỪ FIREFOX DRIVER
+    # ------------------------------------------------------------------
+
+    def inject_cookies(self, source):
+        """
+        Gắn cookies TikTok từ Firefox vào session requests để tránh rate-limit.
+
+        source có thể là:
+          - Selenium WebDriver  : tự gọi driver.get_cookies()
+          - dict {name: value}  : dùng trực tiếp (từ ProfileFeedCrawler.get_cookies_for_requests())
+          - list[dict]          : raw Selenium cookie list
+
+        Gọi method này ngay sau khi ProfileFeedCrawler đã crawl xong 1 creator
+        (lúc đó driver đang ở đúng domain tiktok.com).
+        """
+        cookies: dict[str, str] = {}
+
+        if isinstance(source, dict):
+            # Đã là {name: value}
+            cookies = source
+        elif isinstance(source, list):
+            # Raw Selenium cookie list
+            for c in source:
+                if isinstance(c, dict) and c.get("name"):
+                    cookies[c["name"]] = c.get("value", "")
+        else:
+            # Giả sử là WebDriver object
+            try:
+                raw = source.get_cookies()
+                for c in raw:
+                    if c.get("name"):
+                        cookies[c["name"]] = c.get("value", "")
+            except Exception as e:
+                print(f"[comment] Không lấy được cookies từ driver: {e}")
+                return
+
+        if cookies:
+            self.session.cookies.update(cookies)
+            print(f"[comment] Đã inject {len(cookies)} cookies từ Firefox")
+        else:
+            print("[comment] WARNING: cookies rỗng — TikTok có thể rate-limit nhanh hơn")
+
+    # ------------------------------------------------------------------
+    # RESET SESSION
+    # ------------------------------------------------------------------
+
+    def reset_session(self, cookies: dict | None = None):
+        """
+        Tạo session mới để giảm tích luỹ state sau nhiều request.
+        Truyền cookies vào ngay nếu có.
+        """
         try:
             self.session.close()
         except Exception:
             pass
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
-        print("[comment_crawler] Đã reset session")
+        if cookies:
+            self.session.cookies.update(cookies)
+        print("[comment] Đã reset session")
 
     # ------------------------------------------------------------------
-    # PUBLIC
+    # PUBLIC: CRAWL 1 VIDEO
     # ------------------------------------------------------------------
 
     def crawl(self, creator_id: str, video_id: str) -> dict:
@@ -130,33 +185,34 @@ class CommentCrawler:
         Crawl toàn bộ comment và reply của 1 video.
         Returns: {"total_comments": int, "total_replies": int, "comment_ids": list}
         """
-        print(f"\n[comment_crawler] Crawl video: {video_id}")
+        print(f"\n[comment] Crawl video: {video_id}")
         result = {"total_comments": 0, "total_replies": 0, "comment_ids": []}
 
         existing_cids = self.db.get_existing_comment_cids(video_id, creator_id)
         if existing_cids:
-            print(f"[comment_crawler] Skip {len(existing_cids)} comments đã có")
+            print(f"[comment] Skip {len(existing_cids)} comments đã có")
 
         # --- Fetch tất cả comment pages ---
-        all_comments = []
-        cursor       = 0
-        has_more     = 1
-        page         = 0
-        max_pages    = max(1, config.MAX_COMMENTS_PER_VIDEO // config.API_COMMENT_COUNT)
+        all_comments: list[dict] = []
+        cursor    = 0
+        has_more  = 1
+        page      = 0
+        max_pages = max(1, config.MAX_COMMENTS_PER_VIDEO // config.API_COMMENT_COUNT)
 
         while has_more and page < max_pages:
             resp = self._get_comments(video_id, cursor)
             if not resp:
-                print(f"[comment_crawler] DỪNG do resp=None ở page={page+1}, cursor={cursor}")
+                print(f"[comment] DỪNG resp=None page={page+1} cursor={cursor}")
                 break
 
             items = resp.get("comments") or []
             if not items:
-                print(f"[comment_crawler] DỪNG do items rỗng ở page={page+1}, cursor={cursor}, has_more={resp.get('has_more')}")
+                print(f"[comment] DỪNG items rỗng page={page+1} cursor={cursor} "
+                      f"has_more={resp.get('has_more')}")
                 break
 
             if page == 0:
-                print(f"[comment_crawler] Total: {resp.get('total', 0)} comments")
+                print(f"[comment] Total API: {resp.get('total', 0)}")
 
             all_comments.extend(items)
             cursor   = resp.get("cursor", cursor + config.API_COMMENT_COUNT)
@@ -164,17 +220,11 @@ class CommentCrawler:
             page    += 1
 
             if page > 1:
-                print(f"[comment_crawler] Page {page}: +{len(items)} ({len(all_comments)} tổng)")
+                print(f"[comment] Page {page}: +{len(items)} ({len(all_comments)} tổng)")
 
             if has_more:
                 time.sleep(random.uniform(*config.DELAY_API_REQUEST))
             self._maybe_pause()
-
-            print(
-                    f"[comment_crawler] Page {page + 1} | cursor_in={cursor} | "
-                    f"got={len(items)} | has_more={resp.get('has_more')} | "
-                    f"cursor_out={resp.get('cursor')}"
-                    )   
 
         # --- Upsert comments ---
         saved_c = self.db.upsert_comments(
@@ -191,12 +241,12 @@ class CommentCrawler:
             c for c in all_comments
             if c.get("reply_comment_total", 0) > 0 and c.get("cid")
         ]
-        print(f"[comment_crawler] Fetch replies cho {len(need_replies)} comments...")
+        print(f"[comment] Fetch replies cho {len(need_replies)} comments...")
 
         total_replies = 0
         for idx, comment in enumerate(need_replies, 1):
             cid = comment["cid"]
-            print(f"[comment_crawler] [{idx}/{len(need_replies)}] comment {cid} "
+            print(f"[comment] [{idx}/{len(need_replies)}] comment {cid} "
                   f"({comment.get('reply_comment_total', 0)} replies)")
 
             existing_reply_cids = self.db.get_existing_reply_cids_for_comment(
@@ -219,7 +269,7 @@ class CommentCrawler:
             time.sleep(random.uniform(*config.DELAY_API_REQUEST))
 
         result["total_replies"] = total_replies
-        print(f"[comment_crawler] Xong: {saved_c} comments, {total_replies} replies")
+        print(f"[comment] Xong: {saved_c} comments, {total_replies} replies")
         return result
 
     # ------------------------------------------------------------------
@@ -234,18 +284,18 @@ class CommentCrawler:
             {
                 **BASE_PARAMS,
                 "aweme_id": str(video_id),
-                "count": str(config.API_COMMENT_COUNT),
-                "cursor": str(cursor),
+                "count":    str(config.API_COMMENT_COUNT),
+                "cursor":   str(cursor),
             },
             label=f"video={video_id} cursor={cursor}",
         )
 
     def _fetch_replies(self, video_id: str, comment_id: str) -> list[dict]:
-        all_replies = []
-        cursor      = 0
-        has_more    = 1
-        page        = 0
-        max_pages   = max(1, config.MAX_REPLIES_PER_COMMENT // config.API_REPLY_COUNT)
+        all_replies: list[dict] = []
+        cursor   = 0
+        has_more = 1
+        page     = 0
+        max_pages = max(1, config.MAX_REPLIES_PER_COMMENT // config.API_REPLY_COUNT)
 
         while has_more and page < max_pages:
             self._req_count += 1
@@ -254,10 +304,10 @@ class CommentCrawler:
                 API_REPLY,
                 {
                     **BASE_PARAMS,
-                    "item_id": str(video_id),
+                    "item_id":    str(video_id),
                     "comment_id": str(comment_id),
-                    "count": str(config.API_REPLY_COUNT),
-                    "cursor": str(cursor),
+                    "count":      str(config.API_REPLY_COUNT),
+                    "cursor":     str(cursor),
                 },
                 label=f"reply={comment_id} page={page}",
             )
@@ -277,12 +327,12 @@ class CommentCrawler:
                 time.sleep(random.uniform(*config.DELAY_API_REQUEST))
             self._maybe_pause()
 
-        print(f"[comment_crawler] Replies {comment_id}: {len(all_replies)}")
+        print(f"[comment] Replies {comment_id}: {len(all_replies)}")
         return all_replies
 
     def _maybe_pause(self):
-        """Nghỉ dài định kỳ để tránh bị rate limit."""
+        """Nghỉ dài định kỳ để tránh rate-limit."""
         if self._req_count > 0 and self._req_count % config.PAUSE_EVERY_N_REQUESTS == 0:
             wait = random.uniform(*config.PAUSE_DURATION)
-            print(f"[comment_crawler] Pause định kỳ {wait:.1f}s (req #{self._req_count})")
+            print(f"[comment] Pause định kỳ {wait:.1f}s (req #{self._req_count})")
             time.sleep(wait)

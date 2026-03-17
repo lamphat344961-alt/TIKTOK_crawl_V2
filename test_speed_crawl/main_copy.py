@@ -5,7 +5,7 @@ Orchestrator cho pipeline:
 Mongo (creators list) -> Selenium profile/video -> SQL Server -> comment API -> SQL Server
 """
 from datetime import datetime
-from dry_run_db import DryRunDB
+from test_speed_crawl.dry_run_db import DryRunDB
 
 import os
 from typing import Any
@@ -20,8 +20,8 @@ from selenium.webdriver.support import expected_conditions as EC
 
 import config
 from crawler.comment_crawler import CommentCrawler
-from crawler.creator_crawler import CreatorCrawler
-from crawler.video_crawler import VideoCrawler
+from test_speed_crawl.creator_crawler_res import CreatorCrawler
+from video_crawler_res import VideoCrawler
 from db.db_manager import DBManager
 from helpers import human_sleep, is_within_days
 
