@@ -189,8 +189,8 @@ def main():
 
     # ---- Migrate ----
     fields = {
-        "_id": 1, "ID": 1, "Followers": 1, "Engagement": 1,
-        "Median Views": 1, "Start Price": 1, "Collab Score": 1, "Tags": 1,
+        "_id": 1, "creator_id": 1, "followers_num": 1, "engagement_num": 1,
+        "median_views_num": 1, "price_num": 1, "collab_score_num": 1, "category": 1, "broadcast_score_num": 1,
     }
 
     processed = 0
@@ -198,7 +198,7 @@ def main():
     batch_n   = 0
 
     for doc in collection.find({}, fields):
-        creator_id = str(doc.get("ID") or "").strip()
+        creator_id = str(doc.get("creator_id") or "").strip()
         if not creator_id:
             skipped += 1
             continue
@@ -207,14 +207,15 @@ def main():
 
         row = {
             "CREATOR_ID":        creator_id,
-            "FOLLOWERS":         to_int(doc.get("Followers")),
-            "ENGAGEMENT":        to_float(doc.get("Engagement")),
-            "MEDIAN_VIEWS":      to_int(doc.get("Median Views")),
+            "FOLLOWERS":         to_int(doc.get("followers_num")),
+            "ENGAGEMENT":        to_float(doc.get("engagement_num")),
+            "MEDIAN_VIEWS":      to_int(doc.get("median_views_num")),
             "PRICE":             price,
             "MISSING_PRICE_FLAG": 0 if price is not None else 1,
-            "COLLAB_SCORE":      to_float(doc.get("Collab Score")),
+            "COLLAB_SCORE":      to_float(doc.get("collab_score_num")),
             "CRAWL_STATUS":      "pending",
             "SNAPSHOT_TIME":     datetime.now(),
+            "BROADCAST_SCORE": to_float(doc.get("broadcast_score_num")),
         }
         # Bỏ None để MERGE không overwrite giá trị cũ bằng NULL
         row = {k: v for k, v in row.items() if v is not None}
