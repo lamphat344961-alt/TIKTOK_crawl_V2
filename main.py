@@ -288,6 +288,14 @@ def main():
             else:
                 print(f"[main] @{username} còn lỗi trong quá trình xử lý video/comment, giữ status hiện tại để retry.")
 
+            # Xóa cookies sau mỗi creator — TikTok sẽ hiện captcha rõ ràng
+            # ở lần navigate tiếp theo thay vì chặn ngầm
+            try:
+                driver.delete_all_cookies()
+                print(f"[main] Đã xóa cookies sau khi crawl @{username}")
+            except Exception as e:
+                print(f"[main] Lỗi xóa cookies: {e}")
+
         print("\n[main] Hoàn tất vòng crawl.")
 
     except KeyboardInterrupt:
