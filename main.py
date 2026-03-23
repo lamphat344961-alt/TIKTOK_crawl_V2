@@ -15,6 +15,10 @@ Lưu ý quan trọng về CREATOR_ID:
   Toàn bộ FK chain CREATORS → VIDEOS → COMMENTS → REPLIES đều dùng username.
   profile_feed_crawler._build_creator_dict() và _build_video_dict() đã được fix
   để truyền tiktok_id (username) thay vì author.get("id") (numeric TikTok ID).
+
+[PATCH] navigate_and_wait_for_manual_check():
+  - Re-inject hook SAU KHI user nhấn Enter (hook bị mất khi user refresh trang).
+  - KHÔNG clear buffer sau re-inject — giữ lại response đầu tiên sau refresh.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ import traceback
 from selenium import webdriver
 
 import config
-from crawler.profile_feed_crawler import ProfileFeedCrawler
+from crawler.profile_feed_crawler import ProfileFeedCrawler, _wait_page
 from crawler.comment_crawler import CommentCrawler
 from db.db_manager import DBManager
 
@@ -43,7 +47,8 @@ def build_driver():
 
     firefox_profile_path = getattr(config, "FIREFOX_PROFILE_PATH", None)
     if firefox_profile_path:
-        options.set_preference("profile", firefox_profile_path)
+        options.add_argument("-profile")
+        options.add_argument(firefox_profile_path)
 
     geckodriver_path = getattr(config, "GECKODRIVER_PATH", None)
 
@@ -53,7 +58,6 @@ def build_driver():
     else:
         driver = webdriver.Firefox(options=options)
 
-    
     driver.set_page_load_timeout(90)
 
     return driver
@@ -66,12 +70,18 @@ def build_driver():
 def navigate_and_wait_for_manual_check(driver, username: str):
     """
     1. Navigate đến profile URL ngay trong hàm này.
-    2. Hiện browser để người dùng vượt captcha (nếu có) trực tiếp trên trang đích.
-    3. Nhấn Enter để tiếp tục → crawl(already_navigated=True) sẽ KHÔNG load lại trang.
+    2. Cài hook JS để bắt response item_list.
+    3. Hiện browser để người dùng vượt captcha (nếu có) — thường cần refresh trang.
+    4. Nhấn Enter để tiếp tục.
+    5. [PATCH] Re-inject hook sau khi nhấn Enter vì refresh trang đã xóa hook cũ.
+       Không clear buffer — giữ lại response đầu tiên mà hook bắt được sau refresh.
+    6. crawl(already_navigated=True) sẽ đọc buffer đó trước khi scroll.
 
     Quan trọng: KHÔNG để crawl() gọi driver.get() lại sau khi người dùng đã
     vượt captcha xong — nếu reload sẽ mất trạng thái và phải vượt lại từ đầu.
     """
+    from crawler.profile_feed_crawler import _HOOK_JS, _CLEAR_JS
+
     url = f"https://www.tiktok.com/@{username}"
 
     try:
@@ -89,9 +99,19 @@ def navigate_and_wait_for_manual_check(driver, username: str):
     except Exception as e:
         print(f"[MANUAL CHECK] Lỗi load trang: {e}")
 
+    # Cài hook lần đầu (trước khi user làm gì)
+    try:
+        _wait_page(driver)
+        hook_result = driver.execute_script(_HOOK_JS)
+        driver.execute_script(_CLEAR_JS)
+        print(f"[MANUAL CHECK] Hook installed: {hook_result}")
+    except Exception as e:
+        print(f"[MANUAL CHECK] Lỗi cài hook lần đầu: {e}")
+
     print("\n" + "=" * 90)
     print(f"[MANUAL CHECK] Chuẩn bị crawl profile: {username}")
     print("[MANUAL CHECK] Hãy nhìn cửa sổ browser và tự vượt kiểm tra nếu có.")
+    print("[MANUAL CHECK] Nếu phải refresh trang để vượt captcha — cứ refresh bình thường.")
     print("[MANUAL CHECK] Xong thì quay lại terminal và nhấn Enter để tiếp tục.")
     print("=" * 90)
 
@@ -102,6 +122,23 @@ def navigate_and_wait_for_manual_check(driver, username: str):
     except KeyboardInterrupt:
         print("\n[main] Người dùng dừng chương trình.")
         raise
+
+    # [PATCH] Re-inject hook sau khi user nhấn Enter.
+    # Lý do: nếu user đã refresh trang để vượt captcha, hook JS cũ bị xóa sạch
+    # (window context reset khi navigate). Cần cài lại để:
+    #   (a) bắt response item_list đầu tiên đang nằm trong buffer (nếu hook đã kịp bắt)
+    #   (b) đảm bảo hook hoạt động trong suốt quá trình scroll tiếp theo.
+    # Guard "already_installed" trong _HOOK_JS đảm bảo nếu user KHÔNG refresh
+    # (hook cũ vẫn còn) thì gọi lại vô hại, không reset buffer.
+    # KHÔNG gọi _CLEAR_JS ở đây — giữ nguyên buffer để crawl() đọc.
+    try:
+        _wait_page(driver)
+        hook_result = driver.execute_script(_HOOK_JS)
+        print(f"[MANUAL CHECK] Hook re-injected sau Enter: {hook_result}")
+        # Nếu "installed" → hook vừa được cài lại (user đã refresh)
+        # Nếu "already_installed" → hook cũ vẫn còn (user không refresh), buffer được giữ nguyên
+    except Exception as e:
+        print(f"[MANUAL CHECK] Lỗi re-inject hook: {e}")
 
 
 # ============================================================================

@@ -11,6 +11,9 @@ Các trường hợp tài khoản không lấy được data:
 
 Khi gặp các trường hợp trên, main.py sẽ set CRAWL_STATUS tương ứng
 thay vì 'done', để dễ lọc và phân tích sau.
+
+[PATCH] Bắt response đầu tiên sau khi user refresh vượt captcha:
+  - crawl(): đọc buffer trước khi clear, merge vào all_items sau scroll
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ import config
 # ===========================================================================
 
 _HOOK_JS = r"""
-(function () {
+return (function () {
     if (window.__TT_HOOK_INSTALLED__) return "already_installed";
     window.__TT_HOOK_INSTALLED__ = true;
     window.__TT_CAPTURED__ = [];
@@ -266,6 +269,7 @@ def _build_video_dict(item: dict, tiktok_id: str) -> dict:
         "DESC": item.get("desc"),
         "MUSIC_TITLE": music.get("title"),
         "MUSIC_AUTHOR": music.get("authorName"),
+        "MUSIC_PLAY_URL": music.get("playUrl"),
         "SNAPSHOT_TIME": datetime.now(),
         "RAW_JSON": None,
     }
@@ -343,13 +347,40 @@ class ProfileFeedCrawler:
             print(f"[profile_feed] @{tiktok_id} → {account_status.upper()}")
             return {"CREATOR_ID": tiktok_id, "_FAIL_REASON": account_status}, []
 
-        # ---- Cài hook và clear buffer ----
-        hook_result = self.driver.execute_script(_HOOK_JS)
+        # ---- [PATCH] Đọc buffer trước khi clear ----
+        # Sau khi user vượt captcha và refresh trang, TikTok bắn response item_list
+        # đầu tiên ngay khi load. Hook đã được re-inject trong main.py sau input(),
+        # nên response này được bắt vào buffer. Phải đọc ra trước khi clear,
+        # nếu không sẽ mất toàn bộ ~20 video đầu tiên.
+        pre_items: dict[str, dict] = {}
+        try:
+            pre_captured = self.driver.execute_script(_GET_CAPTURED_JS)
+            if isinstance(pre_captured, dict) and pre_captured.get("data"):
+                pre_items = _parse_captures(pre_captured["data"])
+                if pre_items:
+                    print(f"[profile_feed] Pre-scroll buffer: {len(pre_items)} items (response đầu sau refresh)")
+                else:
+                    print(f"[profile_feed] Pre-scroll buffer: rỗng")
+            else:
+                print(f"[profile_feed] Pre-scroll buffer: rỗng")
+        except Exception as e:
+            print(f"[profile_feed] Lỗi đọc pre-scroll buffer: {e}")
+
+        # Clear buffer rồi mới bắt đầu scroll
         self.driver.execute_script(_CLEAR_JS)
-        print(f"[profile_feed] Hook: {hook_result} → buffer cleared")
+        print(f"[profile_feed] Buffer cleared, bắt đầu scroll")
 
         # ---- Scroll & collect raw items ----
         all_items = self._scroll_and_collect(tiktok_id)
+
+        # ---- [PATCH] Merge pre_items vào all_items ----
+        # pre_items chứa response đầu tiên (bị bỏ sót trước patch).
+        # scroll thắng nếu trùng id (scroll có thể có data mới hơn).
+        if pre_items:
+            merged_count_before = len(all_items)
+            all_items = {**pre_items, **all_items}
+            gained = len(all_items) - merged_count_before
+            print(f"[profile_feed] Sau merge pre-scroll: +{gained} items mới | tổng={len(all_items)}")
 
         if not all_items:
             print(f"[profile_feed] @{tiktok_id} → không lấy được item nào")
@@ -414,7 +445,11 @@ class ProfileFeedCrawler:
             key=lambda x: int(x.get("createTime") or 0),
             reverse=True,
         )
-
+        print(f"[DEBUG] Top 5 createTime của @{tiktok_id}:")
+        for item in sorted_items[:5]:
+            raw = item.get("createTime")
+            dt = _item_create_time_dt(item)
+            print(f"  id={item.get('id')}  raw_createTime={raw}  →  parsed={dt}")
         video_dicts: list[dict] = []
         skipped_old = 0
         kept_unknown_time = 0

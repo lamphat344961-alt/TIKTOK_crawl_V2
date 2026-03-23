@@ -54,7 +54,7 @@ TIKTOK_IDS = [
 # ===========================================================================
 # BỘ LỌC THỜI GIAN VIDEO
 # ===========================================================================
-CRAWL_END_DATE    = date.today()   # Ngày kết thúc (mặc định = hôm nay)
+CRAWL_END_DATE    = date(2026, 3, 19) # Ngày kết thúc (mặc định = hôm nay)
 CRAWL_DAYS_WINDOW = 90             # Cửa sổ thời gian (ngày) — chỉ lấy video trong 90 ngày gần nhất
 
 # Tính tự động — không cần chỉnh 2 dòng dưới
@@ -73,7 +73,7 @@ MAX_SKIP_OUT_OF_RANGE = 5   # (dự phòng, không dùng trong luồng mới)
 
 # MAX_CREATORS = None          → crawl tất cả
 # MAX_CREATORS = 2             → chỉ crawl 2 creator đầu (dùng để test)
-MAX_CREATORS           = 5
+MAX_CREATORS           = 100
 MAX_VIDEOS_PER_CREATOR = None     # hard cap số video mỗi creator (đặt None để không giới hạn)
 MAX_COMMENTS_PER_VIDEO = 10000   # giới hạn comment mỗi video
 MAX_REPLIES_PER_COMMENT = 5000   # giới hạn reply mỗi comment

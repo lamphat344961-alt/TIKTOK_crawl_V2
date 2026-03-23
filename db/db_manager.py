@@ -42,7 +42,7 @@ class DBManager:
     def _build_conn_str(self) -> str:
         driver   = os.getenv("SQL_DRIVER",   os.getenv("SQL_SERVER_DRIVER",   "ODBC Driver 17 for SQL Server"))
         server   = os.getenv("SQL_SERVER",   os.getenv("SQL_SERVER_HOST",     r"ACER-TANPHAT\SQLEXPRESS"))
-        database = os.getenv("SQL_DATABASE", os.getenv("SQL_SERVER_DATABASE", "TikTok_Creator"))
+        database = os.getenv("SQL_DATABASE", os.getenv("SQL_SERVER_DATABASE", "TikTok_Creator_DB_v1"))
         trusted  = os.getenv("SQL_SERVER_TRUSTED_CONNECTION", "1").strip().lower() in {"1", "true", "yes", "y"}
         username = os.getenv("SQL_USERNAME", os.getenv("SQL_SERVER_USERNAME", ""))
         password = os.getenv("SQL_PASSWORD", os.getenv("SQL_SERVER_PASSWORD", ""))
@@ -673,6 +673,7 @@ class DBManager:
             "DESC":          video_dict.get("DESC"),
             "MUSIC_TITLE":   video_dict.get("MUSIC_TITLE"),
             "MUSIC_AUTHOR":  video_dict.get("MUSIC_AUTHOR"),
+            "MUSIC_PLAY_URL": video_dict.get("MUSIC_PLAY_URL"),
             "SNAPSHOT_TIME": video_dict.get("SNAPSHOT_TIME") or datetime.now(),
             "RAW_JSON":      None,
         }
