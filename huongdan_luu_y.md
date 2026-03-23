@@ -9,6 +9,7 @@
 ```
 MongoDB (9,966 creators)
     → [Bước 1] sampling.ipynb  — lấy mẫu 3,000 creators → lưu vào MongoDB collection mới
+    → [tiền bước 2]            — dùng TikTok_Creator_updated_schema.sql chạy trong sql để tạo database trước.
     → [Bước 2] mongo_to_sql.py — đưa 3,000 creators đó sang SQL Server
     → [Bước 3] main.py         — crawl TikTok (video + comment) → lưu vào SQL
     → [Bước 4] sampling.ipynb  — xây dựng pipeline, clustering, báo cáo
