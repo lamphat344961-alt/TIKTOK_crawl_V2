@@ -38,7 +38,7 @@ Trước khi làm bất cứ điều gì, chỉnh thông tin kết nối trong *
 
 ## Bước 1 — Lấy mẫu 3,000 creators
 
-> Chạy notebook `sampling/sampling.ipynb` (chưa code)
+> Chạy notebook `sampling/sampling.ipynb` ()
 
 - Kết nối MongoDB, đọc toàn bộ 9,966 creators
 - Lấy mẫu 3,000 creators — gợi ý stratified theo quy mô kênh (MICRO / MID / MACRO), tag nội dung, hoặc mức giá để mẫu đại diện
@@ -51,7 +51,8 @@ Trước khi làm bất cứ điều gì, chỉnh thông tin kết nối trong *
 
 ## Bước 2 — Chuyển 3,000 creators sang SQL
 
-> Đảm bảo `mongo_to_sql.py` đang trỏ đúng vào collection 3,000 creators (đã chỉnh ở cuối Bước 1)
+> Đảm bảo `mongo_to_sql.py` đang trỏ đúng vào collection 3,000 creators (đã chỉnh ở cuối Bước 1) dùng tiktok_ads_db.sample_direction1_category_stratified.json import vào mongo (chú ý đặt tên DB và collection cho giống mongo_to_sql )
+
 
 ```bash
 python mongo_to_sql.py

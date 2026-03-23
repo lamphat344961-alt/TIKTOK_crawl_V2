@@ -45,13 +45,15 @@ import pyodbc
 
 MONGO_URI           = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB            = "tiktok_ads_db"
-MONGO_COLLECTION    = "creators_vn1"
+MONGO_COLLECTION    = "sample_direction1_category_stratified"
+
+#sample_direction1_random, sample_direction1_category_stratified, sample_direction2_market_reflective
 
 SQL_DRIVER   = os.getenv("SQL_DRIVER",   "ODBC Driver 17 for SQL Server")
 SQL_SERVER   = os.getenv("SQL_SERVER",   r"ACER-TANPHAT\SQLEXPRESS")
 SQL_DATABASE = os.getenv("SQL_DATABASE", "TikTok_Creator_DB_v1")
 
-BATCH_SIZE = 200   # số creator commit mỗi lần (tránh transaction quá lớn)
+BATCH_SIZE = 3000  # số creator commit mỗi lần (tránh transaction quá lớn)
 
 
 # ===========================================================================
