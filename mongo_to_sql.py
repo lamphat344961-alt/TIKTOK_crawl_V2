@@ -45,7 +45,7 @@ import pyodbc
 
 MONGO_URI           = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB            = "tiktok_ads_db"
-MONGO_COLLECTION    = "sample_direction1_category_stratified"
+MONGO_COLLECTION    = "sample_direction1_category_stratified_part1"
 
 #sample_direction1_random, sample_direction1_category_stratified, sample_direction2_market_reflective
 

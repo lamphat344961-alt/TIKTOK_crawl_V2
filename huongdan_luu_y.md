@@ -9,7 +9,7 @@
 ```
 MongoDB (9,966 creators)
     → [Bước 1] sampling.ipynb  — lấy mẫu 3,000 creators → lưu vào MongoDB collection mới
-    → [tiền bước 2]            — dùng TikTok_Creator_updated_schema1.sql (trong 1,2,3) chạy trong sql để tạo database trước.
+    → [tiền bước 2]            — dùng TikTok_Creator_updated_schema_part1.sql (trong 1,2,3) chạy trong sql để tạo database trước.
     → [Bước 2] mongo_to_sql.py — đưa 3,000 creators đó sang SQL Server
     → [Bước 3] main.py         — crawl TikTok (video + comment) → lưu vào SQL
     → [Bước 4] sampling.ipynb  — xây dựng pipeline, clustering, báo cáo
@@ -46,13 +46,13 @@ Trước khi làm bất cứ điều gì, chỉnh thông tin kết nối trong *
 - Lưu kết quả ra file `.json`
 - Tạo một **MongoDB collection mới** và import file `.json` vừa tạo vào đó
 
-> **Sau bước này:** chỉnh `MONGO_COLLECTION` trong `mongo_to_sql.py` trỏ sang collection mới chứa 3,000 creators vừa sampling.
+> **Sau bước này:** chỉnh `MONGO_COLLECTION` trong `mongo_to_sql.py` trỏ sang collection mới chứa 1,000 creators đã chia
 
 ---
 
-## Bước 2 — Chuyển 3,000 creators sang SQL
+## Bước 2 — Chuyển 1,000 creators sang SQL
 
-> Đảm bảo `mongo_to_sql.py` đang trỏ đúng vào collection 3,000 creators (đã chỉnh ở cuối Bước 1) dùng tiktok_ads_db.sample_direction1_category_stratified.json import vào mongo (chú ý đặt tên DB và collection cho giống mongo_to_sql )
+> Đảm bảo `mongo_to_sql.py` đang trỏ đúng vào collection 1,000 creators (đã chỉnh ở cuối Bước 1) dùng tiktok_ads_db.sample_direction1_category_stratified.json import vào mongo (chú ý đặt tên DB và collection cho giống mongo_to_sql )
 
 
 ```bash
