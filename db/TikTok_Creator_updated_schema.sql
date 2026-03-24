@@ -14,17 +14,17 @@ Muc tieu:
 USE master;
 GO
 
-IF DB_ID(N'TikTok_Creator') IS NOT NULL
+IF DB_ID(N'TikTok_Creator_DB_v1') IS NOT NULL
 BEGIN
-    ALTER DATABASE [TikTok_Creator] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-    DROP DATABASE [TikTok_Creator];
+    ALTER DATABASE [TikTok_Creator_DB_v1] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE [TikTok_Creator_DB_v1];
 END
 GO
 
-CREATE DATABASE [TikTok_Creator];
+CREATE DATABASE [TikTok_Creator_DB_v1];
 GO
 
-USE [TikTok_Creator];
+USE [TikTok_Creator_DB_v1];
 GO
 
 -- ============================================================
@@ -62,7 +62,9 @@ CREATE TABLE [dbo].[CREATORS] (
     CONSTRAINT [PK_CREATORS] PRIMARY KEY ([CREATOR_ID])
 );
 GO
-
+ALTER TABLE [dbo].[CREATORS]
+ADD [CRAWL_STATUS] NVARCHAR(20) NOT NULL 
+    CONSTRAINT [DF_CREATORS_CRAWL_STATUS] DEFAULT ('pending');
 -- ============================================================
 -- 3. CREATOR_TAGS
 -- ============================================================
@@ -253,6 +255,14 @@ BEGIN
 END
 GO
 
+
+ALTER TABLE VIDEOS
+ADD MUSIC_PLAY_URL NVARCHAR(MAX);
+
+
+ALTER TABLE [dbo].[CREATORS]
+ADD [BROADCAST_SCORE] DECIMAL(10,4) NULL;
+GO
 /*
 ================================================================
 GHI CHU QUAN TRONG
