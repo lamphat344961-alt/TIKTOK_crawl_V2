@@ -206,7 +206,7 @@ def main():
             print("=" * 90)
 
             # [THAY] Mở browser chỉ để lấy cookies, không crawl feed
-            navigate_for_cookies(driver, username)
+            # navigate_for_cookies(driver, username)
 
             # Bơm cookies từ browser sang requests session của comment crawler
             # — giữ nguyên từ main_1 gốc
