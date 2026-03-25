@@ -12,22 +12,25 @@ Thiết kế:
 - Có file status riêng để resume theo VIDEO_ID + CREATOR_ID
 - Không deduplicate realtime; khuyến nghị merge + dedup hậu kỳ
 
-Ví dụ chạy:
-    python main_comments_csv_multithread.py \
-        --input /path/to/videos.csv \
-        --output /path/to/output/run_2026_03_25 \
-        --workers 4
 
 Input CSV tối thiểu:  
     CREATOR_ID,VIDEO_ID
     caonho,7614520477146565906
     maitrithuc2020,7604721559999155464
+
+1.
 vào SQL : 
 SELECT CREATOR_ID, VIDEO_ID
 FROM VIDEOS
-where CREATOR_ID not in (select CREATOR_ID from CREATORS where CRAWL_STATUS = 'done') -> seve as videos.csv rôi chạy file fix_file_videos.py 
+where CREATOR_ID not in (select CREATOR_ID from CREATORS where CRAWL_STATUS = 'done') -> seve as videos.csv
+
+
+2.
+rôi chạy file fix_file_videos.py 
+
+3.
 rồi :
-    chạy :  python main_comments_csv_multithread.py --input videos_fixed.csv --output output/run_1 --workers 8 --merge-after
+    chạy bang lenh tren terminal:  python main_comments_csv_multithread.py --input videos_fixed.csv --output output/run_1 --workers 16 --merge-after
 """
 
 import argparse
