@@ -181,6 +181,7 @@ def main():
     total_mongo = collection.count_documents({})
     print(f"[migrate] Tổng documents trong MongoDB: {total_mongo}")
 
+
     # ---- Kết nối SQL Server ----
     print(f"[migrate] Kết nối SQL Server: {SQL_SERVER} / {SQL_DATABASE}")
     conn   = pyodbc.connect(build_conn_str(), timeout=10)
@@ -223,7 +224,7 @@ def main():
         row.setdefault("MISSING_PRICE_FLAG", 1)
         row.setdefault("CRAWL_STATUS", "pending")
 
-        tags = normalize_tags(doc.get("Tags"))
+        tags = normalize_tags(doc.get("category"))
 
         try:
             upsert_creator(cursor, row)
