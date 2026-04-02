@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
-import config
+import crawler.config as config
 
 
 # ===========================================================================

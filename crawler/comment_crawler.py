@@ -17,7 +17,7 @@ import time
 
 import requests
 
-import config
+import crawler.config as config
 
 
 # ===========================================================================
